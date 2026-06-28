@@ -36,7 +36,8 @@
     #timeline li { border-bottom:1px solid var(--line); padding:12px 2px; font-size:15px; line-height:1.4; }
     .tweet-row { display:flex; align-items:center; gap:10px; }
     .cmt-area { margin:8px 0 0 46px; }
-    .cmt-item { padding:6px 0; font-size:14px; border-bottom:1px solid var(--line); }
+    .cmt-item { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:14px; border-bottom:1px solid var(--line); }
+    .cmt-avatar { width:28px; height:28px; }
     .cmt-input { display:flex; gap:6px; margin-top:8px; }
     .cmt-input input { flex:1; }
     /* 行内の小さいボタン（削除）は控えめに */
@@ -326,7 +327,12 @@
         const item = document.createElement('div');
         item.className = 'cmt-item';
         const cp = cnames[c.user_id];
-        item.textContent = ((cp && cp.name) || '名無し') + '：' + c.body;
+        const av = document.createElement('img');
+        av.className = 'avatar cmt-avatar';
+        av.src = avatarSrc(c.user_id, cp && cp.avatar);
+        const sp = document.createElement('span');
+        sp.textContent = ((cp && cp.name) || '名無し') + '：' + c.body;
+        item.append(av, sp);
         container.appendChild(item);
       }
       const input = document.createElement('input');
