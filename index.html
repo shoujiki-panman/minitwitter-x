@@ -29,10 +29,16 @@
     p { color:var(--dim); font-size:14px; word-break:break-all; }
     /* タイムライン：カード行 */
     ul { list-style:none; padding:0; margin:0; }
-    #timeline li, #homeTimeline li, #userList li, #myTweets li {
+    #homeTimeline li, #userList li, #myTweets li {
       border-bottom:1px solid var(--line); padding:12px 2px;
       display:flex; align-items:center; gap:10px; font-size:15px; line-height:1.4;
     }
+    #timeline li { border-bottom:1px solid var(--line); padding:12px 2px; font-size:15px; line-height:1.4; }
+    .tweet-row { display:flex; align-items:center; gap:10px; }
+    .cmt-area { margin:8px 0 0 46px; }
+    .cmt-item { padding:6px 0; font-size:14px; border-bottom:1px solid var(--line); }
+    .cmt-input { display:flex; gap:6px; margin-top:8px; }
+    .cmt-input input { flex:1; }
     /* 行内の小さいボタン（削除）は控えめに */
     #timeline li button, #homeTimeline li button, #userList li button, #myTweets li button {
       background:transparent; color:var(--dim); border:1px solid var(--line);
@@ -297,6 +303,50 @@
       await loadTweets();
     }
 
+    // コメント数を「1回」でまとめて取る（N+1回避）
+    async function fetchCommentCounts(tweetIds) {
+      const uniq = [...new Set(tweetIds)];
+      if (uniq.length === 0) return {};
+      const { data, error } = await supabase.from('comments').select('tweet_id').in('tweet_id', uniq);
+      if (error) { console.error(error); return {}; }
+      const map = {};
+      for (const r of data) map[r.tweet_id] = (map[r.tweet_id] || 0) + 1;
+      return map;
+    }
+
+    // ある投稿のコメント一覧＋入力欄を描く
+    async function renderComments(tweetId, container) {
+      container.innerHTML = '読み込み中…';
+      const { data: cs, error } = await supabase.from('comments')
+        .select('*').eq('tweet_id', tweetId).order('created_at', { ascending: true });
+      if (error) { container.textContent = '読み込み失敗'; return; }
+      const cnames = await fetchNames((cs || []).map((c) => c.user_id));
+      container.innerHTML = '';
+      for (const c of (cs || [])) {
+        const item = document.createElement('div');
+        item.className = 'cmt-item';
+        const cp = cnames[c.user_id];
+        item.textContent = ((cp && cp.name) || '名無し') + '：' + c.body;
+        container.appendChild(item);
+      }
+      const input = document.createElement('input');
+      input.placeholder = 'コメントを書く…';
+      const send = document.createElement('button');
+      send.textContent = '送信';
+      send.addEventListener('click', async () => {
+        const body = input.value.trim();
+        if (!body || !myUserId) return;
+        const { error } = await supabase.from('comments').insert({ tweet_id: tweetId, body });
+        if (error) { alert('失敗: ' + error.message); return; }
+        input.value = '';
+        await renderComments(tweetId, container);  // 一覧を更新（コメント欄は開いたまま）
+      });
+      const wrap = document.createElement('div');
+      wrap.className = 'cmt-input';
+      wrap.append(input, send);
+      container.appendChild(wrap);
+    }
+
     // 【読む】一覧を新しい順で取り出して画面に並べる
     async function loadTweets() {
       const { data, error } = await supabase
@@ -314,10 +364,14 @@
         likeCount[r.tweet_id] = (likeCount[r.tweet_id] || 0) + 1;
         if (r.user_id === myUserId) iLiked.add(r.tweet_id);
       }
+      const commentCount = await fetchCommentCounts(data.map((t) => t.id));
 
       timeline.innerHTML = '';
       for (const t of data) {
         const li = document.createElement('li');
+        const row = document.createElement('div');
+        row.className = 'tweet-row';
+
         const prof = names[t.user_id];
         const who = (prof && prof.name) || '名無し';
         const avatar = document.createElement('img');
@@ -325,28 +379,44 @@
         avatar.src = avatarSrc(t.user_id, prof && prof.avatar);
         const text = document.createElement('span');
         text.textContent = who + '：' + t.body + ' ';
-        li.append(avatar, text);
+        row.append(avatar, text);
 
-        // ❤️いいねボタン（押すとトグル・件数つき）
+        // ❤️いいねボタン
         const liked = iLiked.has(t.id);
         const likeBtn = document.createElement('button');
         likeBtn.className = 'like';
         likeBtn.textContent = (liked ? '❤️ ' : '🤍 ') + (likeCount[t.id] || 0);
         likeBtn.addEventListener('click', () => toggleLike(t.id, liked));
-        li.appendChild(likeBtn);
+        row.appendChild(likeBtn);
 
-        // 削除ボタンは「自分の投稿」にだけ表示（見た目のおまけ。本当の防御はRLS）
+        // 💬コメント（押すと一覧＆入力を開閉）
+        const cmtArea = document.createElement('div');
+        cmtArea.className = 'cmt-area';
+        cmtArea.style.display = 'none';
+        const cmtBtn = document.createElement('button');
+        cmtBtn.className = 'cmt';
+        cmtBtn.textContent = '💬 ' + (commentCount[t.id] || 0);
+        cmtBtn.addEventListener('click', async () => {
+          const open = cmtArea.style.display !== 'none';
+          cmtArea.style.display = open ? 'none' : 'block';
+          if (!open) await renderComments(t.id, cmtArea);
+        });
+        row.appendChild(cmtBtn);
+
+        // 削除ボタンは「自分の投稿」にだけ表示（本当の防御はRLS）
         if (t.user_id === myUserId) {
           const delBtn = document.createElement('button');
           delBtn.textContent = '削除';
           delBtn.addEventListener('click', async () => {
             const { error } = await supabase.from('tweets').delete().eq('id', t.id);
             if (error) { alert('削除に失敗: ' + error.message); return; }
-            await loadTweets(); // 消したら一覧を更新
+            await loadTweets();
           });
-          li.appendChild(delBtn);
+          row.appendChild(delBtn);
         }
 
+        li.appendChild(row);
+        li.appendChild(cmtArea);
         timeline.appendChild(li);
       }
     }
@@ -403,6 +473,7 @@
         btn.textContent = isFollowing ? 'フォロー中' : 'フォロー';
         btn.addEventListener('click', async () => {
           if (isFollowing) {
+            if (!confirm('フォロー解除しますか？')) return;   // 確認（誤操作防止）
             const { error } = await supabase.from('follows').delete().eq('followee_id', p.id); // RLSで自分の分だけ
             if (error) { alert('失敗: ' + error.message); return; }
           } else {
