@@ -29,15 +29,16 @@
     p { color:var(--dim); font-size:14px; word-break:break-all; }
     /* タイムライン：カード行 */
     ul { list-style:none; padding:0; margin:0; }
-    #timeline li, #homeTimeline li, #userList li {
+    #timeline li, #homeTimeline li, #userList li, #myTweets li {
       border-bottom:1px solid var(--line); padding:12px 2px;
       display:flex; align-items:center; gap:10px; font-size:15px; line-height:1.4;
     }
     /* 行内の小さいボタン（削除）は控えめに */
-    #timeline li button, #homeTimeline li button, #userList li button {
+    #timeline li button, #homeTimeline li button, #userList li button, #myTweets li button {
       background:transparent; color:var(--dim); border:1px solid var(--line);
       border-radius:9999px; padding:2px 10px; font-size:12px; font-weight:normal;
     }
+    #myTweets li button { margin-left:auto; }
     #timeline li button.like { margin-left:auto; }
     #userList li button.follow { margin-left:auto; background:var(--blue); color:#fff; border:none; }
     .avatar { width:36px; height:36px; border-radius:9999px; background:#16181c; flex:none; }
@@ -45,46 +46,82 @@
     #profileCard #myAvatar { width:56px; height:56px; }
     #profileCard .fields { flex:1; }
     #profileCard input, #profileCard textarea { width:100%; box-sizing:border-box; display:block; }
+    #nav { display:none; gap:18px; border-bottom:1px solid var(--line); padding:10px 0; margin:8px 0 12px; position:sticky; top:0; background:#000; z-index:1; }
+    #nav a { color:var(--dim); text-decoration:none; font-weight:bold; font-size:15px; }
+    #nav a.active { color:var(--blue); }
+    .view { display:none; }   /* 既定は非表示。JSが現在のビューだけ表示する（読み込み中の漏れ防止） */
+    #logoutBtn { display:none; }   /* 既定（未ログイン）は出さない。ログイン時にJSで表示 */
+    #logoutDialog { background:#000; color:#e7e9ea; border:1px solid var(--line); border-radius:16px; padding:24px; width:300px; max-width:90vw; }
+    #logoutDialog::backdrop { background:rgba(91,112,131,.4); }
+    #logoutDialog h3 { margin:0 0 6px; font-size:18px; }
+    #logoutDialog p { color:var(--dim); margin:0 0 20px; }
+    #logoutDialog .dialog-actions { display:flex; flex-direction:column; gap:10px; }
+    #logoutDialog .dialog-actions button { width:100%; padding:10px; }
+    #logoutConfirm { background:#fff; color:#000; }
+    #logoutCancel { background:transparent; color:#e7e9ea; border:1px solid var(--line); }
   </style>
 </head>
 <body>
   <h1>ミニTwitter</h1>
 
-  <!-- ログイン前/後で出し分けする場所 -->
+  <!-- ヘッダー：ログイン状態 -->
+  <p id="status">未ログイン</p>
   <button id="loginBtn">Googleでログイン</button>
   <button id="logoutBtn">ログアウト</button>
-  <p id="status">未ログイン</p>
 
-  <!-- プロフィール（1か所にまとめ） -->
-  <div id="profileCard">
-    <img id="myAvatar" class="avatar" alt="" />
-    <div class="fields">
-      <input id="displayName" placeholder="表示名" />
-      <textarea id="bioInput" placeholder="ひとこと（自己紹介）" rows="2"></textarea>
-      <label class="avatarUpload">アバター画像: <input type="file" id="avatarInput" accept="image/*" /></label>
-      <button id="saveProfileBtn">プロフィールを更新</button>
+  <!-- ナビ（ハッシュで画面切替） -->
+  <nav id="nav">
+    <a href="#home">ホーム</a>
+    <a href="#explore">さがす</a>
+    <a href="#profile">プロフィール</a>
+  </nav>
+
+  <p id="gate">🔒 ログインすると使えます。上の「Googleでログイン」を押してください。</p>
+
+  <!-- ログアウト確認モーダル（X風・自作 dialog） -->
+  <dialog id="logoutDialog">
+    <h3>ログアウトしますか？</h3>
+    <p>いつでもまたログインできます。</p>
+    <div class="dialog-actions">
+      <button id="logoutConfirm">ログアウト</button>
+      <button id="logoutCancel">キャンセル</button>
     </div>
-  </div>
+  </dialog>
 
-  <hr />
-  <!-- 投稿フォーム -->
-  <textarea id="tweetBody" placeholder="いまどうしてる？" rows="3"></textarea><br />
-  <label><input type="checkbox" id="isDraft" /> 下書き（自分だけ）</label>
-  <button id="postBtn">ポスト</button>
+  <!-- ===== ホーム ===== -->
+  <section id="view-home" class="view">
+    <textarea id="tweetBody" placeholder="いまどうしてる？" rows="3"></textarea><br />
+    <button id="postBtn">ポスト</button>
+    <label><input type="checkbox" id="isDraft" /> 下書き（自分だけ）</label>
+    <ul id="timeline"></ul>
+    <h3>ホームタイムライン（フォロー中の人だけ）</h3>
+    <button id="loadHomeBtn">ホームを更新</button>
+    <ul id="homeTimeline"></ul>
+  </section>
 
-  <!-- タイムライン（投稿一覧） -->
-  <ul id="timeline"></ul>
+  <!-- ===== さがす ===== -->
+  <section id="view-explore" class="view">
+    <h3>ユーザーを探す</h3>
+    <input id="searchInput" placeholder="ユーザーを検索（名前・ひとこと）" />
+    <button id="searchBtn">検索</button>
+    <ul id="userList"></ul>
+  </section>
 
-  <hr />
-  <!-- X4b: ユーザーを探す（一覧からフォロー） -->
-  <h3>ユーザーを探す</h3>
-  <ul id="userList"></ul>
-
-  <hr />
-  <!-- ホームタイムライン（フォロー中の人だけ） -->
-  <h3>ホームタイムライン（フォロー中の人だけ）</h3>
-  <button id="loadHomeBtn">ホームを更新</button>
-  <ul id="homeTimeline"></ul>
+  <!-- ===== プロフィール（マイページ） ===== -->
+  <section id="view-profile" class="view">
+    <h3>プロフィール</h3>
+    <div id="profileCard">
+      <img id="myAvatar" class="avatar" alt="" />
+      <div class="fields">
+        <input id="displayName" placeholder="表示名" />
+        <textarea id="bioInput" placeholder="ひとこと（自己紹介）" rows="2"></textarea>
+        <label class="avatarUpload">アバター画像: <input type="file" id="avatarInput" accept="image/*" /></label>
+        <button id="saveProfileBtn">プロフィールを更新</button>
+      </div>
+    </div>
+    <h3>自分の投稿（下書き含む）</h3>
+    <ul id="myTweets"></ul>
+  </section>
 
   <script type="module">
     import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -95,6 +132,31 @@
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtvZ3hrbmhkdmdlbmN5eW50YnJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0OTg0MTMsImV4cCI6MjA5ODA3NDQxM30.JlF0E1uOKF9SEepvCNv1dXqUfw9U41jgmZl6xBNk4NE';
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // --- N1: ハッシュで画面切替（SPAルーティング） ---
+    const VIEWS = ['home', 'explore', 'profile'];
+    function showView() {
+      const cur = (location.hash || '#home').replace('#', '');
+      const name = VIEWS.includes(cur) ? cur : 'home';
+      for (const v of VIEWS) {
+        document.getElementById('view-' + v).style.display = (v === name) ? 'block' : 'none';
+      }
+      document.querySelectorAll('#nav a').forEach((a) => {
+        a.classList.toggle('active', a.getAttribute('href') === '#' + name);
+      });
+    }
+    // ログインしている時だけアプリ本体を表示。未ログインはログイン案内だけ
+    function applyAuthGate(loggedIn) {
+      document.getElementById('loginBtn').style.display = loggedIn ? 'none' : 'inline-block';   // ログイン中は出さない
+      document.getElementById('logoutBtn').style.display = loggedIn ? 'inline-block' : 'none';  // ログイン前は出さない
+      document.getElementById('nav').style.display = loggedIn ? 'flex' : 'none';
+      document.getElementById('gate').style.display = loggedIn ? 'none' : 'block';
+      if (loggedIn) { showView(); }
+      else { for (const v of VIEWS) document.getElementById('view-' + v).style.display = 'none'; }
+    }
+    window.addEventListener('hashchange', () => {
+      if (document.getElementById('nav').style.display !== 'none') showView();
+    });
 
     const loginBtn = document.getElementById('loginBtn');
     const status = document.getElementById('status');
@@ -110,7 +172,10 @@
 
     // ログアウト：セッションを消して再読み込み
     const logoutBtn = document.getElementById('logoutBtn');
-    logoutBtn.addEventListener('click', async () => {
+    const logoutDialog = document.getElementById('logoutDialog');
+    logoutBtn.addEventListener('click', () => logoutDialog.showModal());            // モーダルを開く
+    document.getElementById('logoutCancel').addEventListener('click', () => logoutDialog.close());
+    document.getElementById('logoutConfirm').addEventListener('click', async () => {
       await supabase.auth.signOut();
       location.reload();
     });
@@ -119,6 +184,7 @@
     const { data: { user } } = await supabase.auth.getUser();
     const myUserId = user ? user.id : null;   // 自分のID（持ち主判定に使う）
     if (user) status.textContent = 'ログイン中';
+    applyAuthGate(!!myUserId);   // ログイン状態でアプリ表示/ログイン案内を切替
 
     // --- X1/P: プロフィール（表示名・ひとこと・アバターを1か所で）---
     const displayNameInput = document.getElementById('displayName');
@@ -236,6 +302,7 @@
       const { data, error } = await supabase
         .from('tweets')
         .select('*')
+        .eq('is_public', true)                       // ホームは公開のみ（下書きは出さない）
         .order('created_at', { ascending: false }); // 新しいものが上
       if (error) { console.error(error); return; }
       const names = await fetchNames(data.map((t) => t.user_id));
@@ -299,19 +366,22 @@
 
       if (error) { console.error(error); alert('保存に失敗: ' + error.message); return; }
       tweetBody.value = '';   // 入力欄を空に
-      await loadTweets();     // 保存後にもう一度読み込む
+      await loadTweets();     // 公開タイムライン更新
+      await loadMyTweets();   // マイページの自分の投稿も更新
     });
 
     // --- 第7章/X4b: ユーザー一覧からフォロー ---
     const userList = document.getElementById('userList');
 
     // 登録ユーザーを一覧表示（アイコン＋名前＋フォロー/解除ボタン）
-    async function loadUsers() {
+    async function loadUsers(query = '') {
       userList.innerHTML = '';
       if (!myUserId) { userList.innerHTML = '<li>（ログインしてね）</li>'; return; }
 
-      // 全ユーザーのプロフィール
-      const { data: profs, error: e1 } = await supabase.from('profiles').select('id, display_name, avatar_url');
+      // プロフィール一覧（検索語があれば名前 or ひとことで部分一致＝ilike）
+      let q = supabase.from('profiles').select('id, display_name, avatar_url');
+      if (query) q = q.or(`display_name.ilike.%${query}%,bio.ilike.%${query}%`);
+      const { data: profs, error: e1 } = await q;
       if (e1) { console.error(e1); return; }
       // 自分がフォロー中の人（突き合わせ用のセット）
       const { data: f } = await supabase.from('follows').select('followee_id').eq('follower_id', myUserId);
@@ -347,6 +417,12 @@
         userList.appendChild(li);
       }
     }
+
+    // 検索：ボタン or Enter でユーザー検索（空なら全員）
+    const searchInput = document.getElementById('searchInput');
+    const searchBtn = document.getElementById('searchBtn');
+    searchBtn.addEventListener('click', () => loadUsers(searchInput.value.trim()));
+    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadUsers(searchInput.value.trim()); });
 
     // --- 第8章: ホームタイムライン（2つの表をまたぐ） ---
     const loadHomeBtn = document.getElementById('loadHomeBtn');
@@ -390,10 +466,36 @@
     }
     loadHomeBtn.addEventListener('click', loadHome);
 
+    // 自分の投稿（下書き含む）をマイページに表示
+    const myTweets = document.getElementById('myTweets');
+    async function loadMyTweets() {
+      myTweets.innerHTML = '';
+      if (!myUserId) return;
+      const { data, error } = await supabase.from('tweets')
+        .select('*').eq('user_id', myUserId).order('created_at', { ascending: false });
+      if (error) { console.error(error); return; }
+      for (const t of data) {
+        const li = document.createElement('li');
+        const span = document.createElement('span');
+        span.textContent = (t.is_public ? '' : '🔒下書き ') + t.body + ' ';
+        li.appendChild(span);
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '削除';
+        delBtn.addEventListener('click', async () => {
+          const { error } = await supabase.from('tweets').delete().eq('id', t.id);
+          if (error) { alert('削除に失敗: ' + error.message); return; }
+          await loadMyTweets(); await loadTweets();
+        });
+        li.appendChild(delBtn);
+        myTweets.appendChild(li);
+      }
+    }
+
     // 最初に一覧を表示
     await loadTweets();
     await loadUsers();
     await loadHome();
+    await loadMyTweets();
   </script>
 </body>
 </html>
