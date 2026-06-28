@@ -38,6 +38,9 @@
     .cmt-area { margin:8px 0 0 46px; }
     .cmt-item { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:14px; border-bottom:1px solid var(--line); }
     .cmt-avatar { width:28px; height:28px; }
+    #userProfileCard { display:flex; gap:12px; align-items:flex-start; border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
+    #userTweets li { border-bottom:1px solid var(--line); padding:12px 2px; font-size:15px; }
+    #userBack { color:var(--blue); text-decoration:none; display:inline-block; margin:8px 0; }
     .cmt-input { display:flex; gap:6px; margin-top:8px; }
     .cmt-input input { flex:1; }
     /* 行内の小さいボタン（削除）は控えめに */
@@ -130,6 +133,14 @@
     <ul id="myTweets"></ul>
   </section>
 
+  <!-- ===== ユーザー（他人のプロフィール） ===== -->
+  <section id="view-user" class="view">
+    <a href="#home" id="userBack">← ホームへ</a>
+    <div id="userProfileCard"></div>
+    <h3>投稿</h3>
+    <ul id="userTweets"></ul>
+  </section>
+
   <script type="module">
     import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -142,10 +153,20 @@
 
     // --- N1: ハッシュで画面切替（SPAルーティング） ---
     const VIEWS = ['home', 'explore', 'profile'];
+    const ALL_VIEWS = ['home', 'explore', 'profile', 'user'];
     function showView() {
-      const cur = (location.hash || '#home').replace('#', '');
+      const hash = location.hash || '#home';
+      // #user/<id> ＝ 他人のプロフィール画面
+      if (hash.startsWith('#user/')) {
+        const uid = hash.slice('#user/'.length);
+        for (const v of ALL_VIEWS) document.getElementById('view-' + v).style.display = (v === 'user') ? 'block' : 'none';
+        document.querySelectorAll('#nav a').forEach((a) => a.classList.remove('active'));
+        loadUserProfile(uid);
+        return;
+      }
+      const cur = hash.replace('#', '');
       const name = VIEWS.includes(cur) ? cur : 'home';
-      for (const v of VIEWS) {
+      for (const v of ALL_VIEWS) {
         document.getElementById('view-' + v).style.display = (v === name) ? 'block' : 'none';
       }
       document.querySelectorAll('#nav a').forEach((a) => {
@@ -164,6 +185,65 @@
     window.addEventListener('hashchange', () => {
       if (document.getElementById('nav').style.display !== 'none') showView();
     });
+
+    // クリックでそのユーザーのプロフィールへ飛べるアバターを作る
+    function avatarEl(userId, url) {
+      const img = document.createElement('img');
+      img.className = 'avatar';
+      img.src = avatarSrc(userId, url);
+      img.style.cursor = 'pointer';
+      img.title = 'プロフィールを見る';
+      img.addEventListener('click', () => { location.hash = '#user/' + userId; });
+      return img;
+    }
+
+    // 他人（または自分）のプロフィール画面を表示
+    async function loadUserProfile(uid) {
+      const card = document.getElementById('userProfileCard');
+      const list = document.getElementById('userTweets');
+      card.innerHTML = ''; list.innerHTML = '';
+      const { data: p } = await supabase.from('profiles')
+        .select('id, display_name, bio, avatar_url').eq('id', uid).single();
+      const av = document.createElement('img');
+      av.className = 'avatar'; av.style.width = '56px'; av.style.height = '56px';
+      av.src = avatarSrc(uid, p && p.avatar_url);
+      const info = document.createElement('div'); info.style.flex = '1';
+      const nm = document.createElement('div'); nm.style.fontWeight = 'bold'; nm.style.fontSize = '18px';
+      nm.textContent = (p && p.display_name) || '名無し';
+      const bio = document.createElement('div'); bio.style.color = 'var(--dim)';
+      bio.textContent = (p && p.bio) || '';
+      info.append(nm, bio);
+      // 自分以外ならフォロー/解除ボタン
+      if (myUserId && uid !== myUserId) {
+        const { data: f } = await supabase.from('follows')
+          .select('followee_id').eq('follower_id', myUserId).eq('followee_id', uid);
+        const isFollowing = !!(f && f.length);
+        const fb = document.createElement('button');
+        fb.style.marginTop = '8px';
+        fb.textContent = isFollowing ? 'フォロー中' : 'フォロー';
+        fb.addEventListener('click', async () => {
+          if (isFollowing) {
+            if (!confirm('フォロー解除しますか？')) return;
+            await supabase.from('follows').delete().eq('followee_id', uid);
+          } else {
+            await supabase.from('follows').insert({ followee_id: uid });
+          }
+          await loadUserProfile(uid);
+          await loadHome();
+          await loadUsers();
+        });
+        info.appendChild(fb);
+      }
+      card.append(av, info);
+      // その人の公開投稿
+      const { data: ts } = await supabase.from('tweets')
+        .select('*').eq('user_id', uid).eq('is_public', true).order('created_at', { ascending: false });
+      for (const t of (ts || [])) {
+        const li = document.createElement('li');
+        li.textContent = t.body;
+        list.appendChild(li);
+      }
+    }
 
     const loginBtn = document.getElementById('loginBtn');
     const status = document.getElementById('status');
@@ -327,9 +407,8 @@
         const item = document.createElement('div');
         item.className = 'cmt-item';
         const cp = cnames[c.user_id];
-        const av = document.createElement('img');
-        av.className = 'avatar cmt-avatar';
-        av.src = avatarSrc(c.user_id, cp && cp.avatar);
+        const av = avatarEl(c.user_id, cp && cp.avatar);
+        av.classList.add('cmt-avatar');
         const sp = document.createElement('span');
         sp.textContent = ((cp && cp.name) || '名無し') + '：' + c.body;
         item.append(av, sp);
@@ -380,9 +459,7 @@
 
         const prof = names[t.user_id];
         const who = (prof && prof.name) || '名無し';
-        const avatar = document.createElement('img');
-        avatar.className = 'avatar';
-        avatar.src = avatarSrc(t.user_id, prof && prof.avatar);
+        const avatar = avatarEl(t.user_id, prof && prof.avatar);
         const text = document.createElement('span');
         text.textContent = who + '：' + t.body + ' ';
         row.append(avatar, text);
@@ -467,9 +544,7 @@
         if (p.id === myUserId) continue; // 自分は一覧に出さない
 
         const li = document.createElement('li');
-        const avatar = document.createElement('img');
-        avatar.className = 'avatar';
-        avatar.src = avatarSrc(p.id, p.avatar_url);
+        const avatar = avatarEl(p.id, p.avatar_url);
         const text = document.createElement('span');
         text.textContent = p.display_name;
 
@@ -532,9 +607,7 @@
         const li = document.createElement('li');
         const prof = names[t.user_id];
         const who = (prof && prof.name) || '名無し';
-        const avatar = document.createElement('img');
-        avatar.className = 'avatar';
-        avatar.src = avatarSrc(t.user_id, prof && prof.avatar);
+        const avatar = avatarEl(t.user_id, prof && prof.avatar);
         const text = document.createElement('span');
         text.textContent = who + '：' + t.body;
         li.append(avatar, text);
