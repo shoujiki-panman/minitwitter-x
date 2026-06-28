@@ -35,7 +35,8 @@
       display:flex; align-items:center; gap:10px; font-size:15px; line-height:1.4;
     }
     #timeline li { border-bottom:1px solid var(--line); padding:12px 2px; font-size:15px; line-height:1.4; }
-    .tweet-row { display:flex; align-items:center; gap:10px; }
+    .tweet-main { display:flex; align-items:flex-start; gap:10px; }
+    .tweet-actions { display:flex; gap:10px; margin:8px 0 0 46px; }
     .cmt-area { margin:8px 0 0 46px; }
     .cmt-item { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:14px; border-bottom:1px solid var(--line); }
     .cmt-avatar { width:28px; height:28px; }
@@ -50,7 +51,6 @@
       border-radius:9999px; padding:2px 10px; font-size:12px; font-weight:normal;
     }
     #myTweets li button { margin-left:auto; }
-    #timeline li button.like { margin-left:auto; }
     #userList li button.follow { margin-left:auto; background:var(--blue); color:#fff; border:none; }
     .avatar { width:36px; height:36px; border-radius:9999px; background:#16181c; flex:none; }
     #profileCard { display:flex; gap:12px; align-items:flex-start; border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
@@ -455,25 +455,29 @@
       timeline.innerHTML = '';
       for (const t of data) {
         const li = document.createElement('li');
-        const row = document.createElement('div');
-        row.className = 'tweet-row';
 
+        // 上段：アバター＋本文（本文は横幅いっぱい）
+        const main = document.createElement('div');
+        main.className = 'tweet-main';
         const prof = names[t.user_id];
         const who = (prof && prof.name) || '名無し';
         const avatar = avatarEl(t.user_id, prof && prof.avatar);
         const text = document.createElement('span');
-        text.textContent = who + '：' + t.body + ' ';
-        row.append(avatar, text);
+        text.textContent = who + '：' + t.body;
+        main.append(avatar, text);
+        li.appendChild(main);
 
-        // ❤️いいねボタン
+        // 下段：アクション（いいね・コメント・削除）
+        const actions = document.createElement('div');
+        actions.className = 'tweet-actions';
+
         const liked = iLiked.has(t.id);
         const likeBtn = document.createElement('button');
         likeBtn.className = 'like';
         likeBtn.textContent = (liked ? '❤️ ' : '🤍 ') + (likeCount[t.id] || 0);
         likeBtn.addEventListener('click', () => toggleLike(t.id, liked));
-        row.appendChild(likeBtn);
+        actions.appendChild(likeBtn);
 
-        // 💬コメント（押すと一覧＆入力を開閉）
         const cmtArea = document.createElement('div');
         cmtArea.className = 'cmt-area';
         cmtArea.style.display = 'none';
@@ -485,7 +489,7 @@
           cmtArea.style.display = open ? 'none' : 'block';
           if (!open) await renderComments(t.id, cmtArea);
         });
-        row.appendChild(cmtBtn);
+        actions.appendChild(cmtBtn);
 
         // 削除ボタンは「自分の投稿」にだけ表示（本当の防御はRLS）
         if (t.user_id === myUserId) {
@@ -496,10 +500,10 @@
             if (error) { alert('削除に失敗: ' + error.message); return; }
             await loadTweets();
           });
-          row.appendChild(delBtn);
+          actions.appendChild(delBtn);
         }
 
-        li.appendChild(row);
+        li.appendChild(actions);
         li.appendChild(cmtArea);
         timeline.appendChild(li);
       }
