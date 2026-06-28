@@ -43,6 +43,7 @@
     #userProfileCard { display:flex; gap:12px; align-items:flex-start; border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
     #userTweets li { border-bottom:1px solid var(--line); padding:12px 2px; font-size:15px; }
     #userBack { color:var(--blue); text-decoration:none; display:inline-block; margin:8px 0; }
+    #deleteDataBtn { background:#f4212e; margin-top:16px; }
     .cmt-input { display:flex; gap:6px; margin-top:8px; }
     .cmt-input input { flex:1; }
     /* 行内の小さいボタン（削除）は控えめに */
@@ -132,6 +133,7 @@
     </div>
     <h3>自分の投稿（下書き含む）</h3>
     <ul id="myTweets"></ul>
+    <button id="deleteDataBtn">⚠️ 自分のデータを消す</button>
   </section>
 
   <!-- ===== ユーザー（他人のプロフィール） ===== -->
@@ -283,7 +285,7 @@
 
     if (myUserId) {
       // プロフィールが無ければ作る（既定名＝メールの@より前）。あれば上書きしない
-      const defaultName = user.email ? user.email.split('@')[0] : 'user';
+      const defaultName = 'パン仲間' + Math.floor(1000 + Math.random() * 9000); // メール名を出さず無難な自動名
       await supabase.from('profiles')
         .upsert({ id: myUserId, display_name: defaultName }, { onConflict: 'id', ignoreDuplicates: true });
       // 今のプロフィールをカードに反映（メアドは画面に出さない）
@@ -310,6 +312,20 @@
       await loadTweets();
       await loadHome();
       await loadUsers();
+    });
+
+    // --- データ削除（自分の足跡を全部消す）---
+    document.getElementById('deleteDataBtn').addEventListener('click', async () => {
+      if (!myUserId) return;
+      if (!confirm('あなたのプロフィール・投稿・いいね・コメント・フォローを全部消します。よろしいですか？')) return;
+      await supabase.from('likes').delete().eq('user_id', myUserId);
+      await supabase.from('comments').delete().eq('user_id', myUserId);
+      await supabase.from('follows').delete().eq('follower_id', myUserId);
+      await supabase.from('tweets').delete().eq('user_id', myUserId);   // 自分の投稿（紐づくいいね/コメントもcascadeで消える）
+      await supabase.from('profiles').delete().eq('id', myUserId);
+      await supabase.auth.signOut();
+      alert('データを消してログアウトしました');
+      location.reload();
     });
 
     // --- A2: アバター画像をアップロード ---
