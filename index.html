@@ -82,6 +82,12 @@
     .grok-input { display:flex; gap:8px; align-items:flex-end; position:sticky; bottom:0; background:#000; padding:8px 0; }
     .grok-input textarea { flex:1; margin:0; }
     #grokMeta { font-size:12px; }
+    #grokWebToggle { display:inline-flex; align-items:center; gap:6px; margin:6px 0; font-size:13px; }
+    #grokSources { display:none; margin:0 0 8px; padding:10px 12px; background:#16181c;
+      border:1px solid var(--line); border-radius:12px; font-size:13px; }
+    #grokSources .src-head { color:var(--dim); margin-bottom:4px; }
+    #grokSources a { display:block; color:var(--blue); text-decoration:none; padding:2px 0; word-break:break-all; }
+    #grokSources a:hover { text-decoration:underline; }
     /* AI機能（作文アシスト・要約） */
     .ai-tools { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
     .ai-tools button, #summarizeTlBtn, .ai-btn {
@@ -191,7 +197,9 @@
     <h3>AI と会話する</h3>
     <div id="grokConvList"></div>
     <button id="grokNew">＋ 新しい会話</button>
+    <label id="grokWebToggle"><input type="checkbox" id="grokWeb" /> 🌐 最新情報も調べる（Web検索）</label>
     <div id="grokLog"></div>
+    <div id="grokSources"></div>
     <div class="grok-input">
       <textarea id="grokInput" placeholder="AIに聞いてみる…" rows="2"></textarea>
       <button id="grokSend">送信</button>
@@ -776,6 +784,26 @@
         '覚えている事実: ' + grokMemory.length + '件 ／ 要約に畳んだ発言: ' + grokSummarizedCount + '件';
     }
 
+    // Web検索の出典を、クリックできるリンクとして表示（正直に情報源を見せる）
+    function renderGrokSources(citations) {
+      const el = document.getElementById('grokSources');
+      el.innerHTML = '';
+      if (!citations || !citations.length) { el.style.display = 'none'; return; }
+      el.style.display = 'block';
+      const head = document.createElement('div');
+      head.className = 'src-head'; head.textContent = '出典:';
+      el.appendChild(head);
+      const seen = new Set();
+      for (const c of citations) {
+        if (!c || !c.url || seen.has(c.url)) continue;
+        seen.add(c.url);
+        const a = document.createElement('a');
+        a.href = c.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.textContent = '・' + (c.title || c.url);
+        el.appendChild(a);
+      }
+    }
+
     async function grokSend(text) {
       if (grokSending || !text.trim()) return;
       grokSending = true;
@@ -784,36 +812,63 @@
         grokHistory.push({ role: 'user', content: text });
         grokRender();
         const token = await grokToken();
-        const res = await fetch(GROK_SERVER + '/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-          body: JSON.stringify({ messages: grokBuildMessages() }),
-        });
-        if (!res.ok) {
-          let msg = 'エラー';
-          try { msg = (await res.json()).error || msg; } catch (e) {}
-          grokHistory.push({ role: 'assistant', content: '⚠ ' + msg });
+        renderGrokSources(null);   // 前回の出典表示を消す
+        const webOn = document.getElementById('grokWeb').checked;
+
+        if (webOn) {
+          // 🌐 Web検索モード: OpenAI純正のweb_searchで最新情報＋出典を取る（1回・非ストリーム）
+          grokHistory.push({ role: 'assistant', content: '🌐 最新情報を検索中…' });
           grokRender();
-          return;
-        }
-        grokHistory.push({ role: 'assistant', content: '' });
-        const aiMsg = grokHistory[grokHistory.length - 1];
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const payload = line.slice(6);
-            if (payload === '[DONE]') continue;
-            if (payload === '[ERROR]') { aiMsg.content += '（エラー）'; continue; }
-            aiMsg.content += JSON.parse(payload);
+          const aiMsg = grokHistory[grokHistory.length - 1];
+          const res = await fetch(GROK_SERVER + '/api/websearch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ input: text }),
+          });
+          if (!res.ok) {
+            let msg = 'エラー';
+            try { msg = (await res.json()).error || msg; } catch (e) {}
+            aiMsg.content = '⚠ ' + msg;
             grokRender();
+            return;
+          }
+          const data = await res.json();
+          aiMsg.content = data.text || '(回答が空でした)';
+          grokRender();
+          renderGrokSources(data.citations);
+        } else {
+          // 通常モード: /api/chat をストリーミング表示
+          const res = await fetch(GROK_SERVER + '/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ messages: grokBuildMessages() }),
+          });
+          if (!res.ok) {
+            let msg = 'エラー';
+            try { msg = (await res.json()).error || msg; } catch (e) {}
+            grokHistory.push({ role: 'assistant', content: '⚠ ' + msg });
+            grokRender();
+            return;
+          }
+          grokHistory.push({ role: 'assistant', content: '' });
+          const aiMsg = grokHistory[grokHistory.length - 1];
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const payload = line.slice(6);
+              if (payload === '[DONE]') continue;
+              if (payload === '[ERROR]') { aiMsg.content += '（エラー）'; continue; }
+              aiMsg.content += JSON.parse(payload);
+              grokRender();
+            }
           }
         }
         // 最初の発言のときだけ、この会話をDBに作る（＝空の「新しい会話」を量産しない）
@@ -826,7 +881,7 @@
         }
         await supabase.from('messages').insert([
           { conversation_id: grokConvId, role: 'user', content: text },
-          { conversation_id: grokConvId, role: 'assistant', content: aiMsg.content },
+          { conversation_id: grokConvId, role: 'assistant', content: grokHistory[grokHistory.length - 1].content },
         ]);
         await grokMaybeSummarize();
         await grokExtractFact(text);
@@ -896,6 +951,7 @@
       grokHistory = [{ role: 'system', content: GROK_BASE_SYSTEM }];
       for (const r of (rows || [])) grokHistory.push({ role: r.role, content: r.content });
       grokRender();
+      renderGrokSources(null);
       await grokLoadConversations();
     }
 
@@ -906,6 +962,7 @@
       grokSummarizedCount = 0;
       grokHistory = [{ role: 'system', content: GROK_BASE_SYSTEM }];
       grokRender();
+      renderGrokSources(null);
       await grokLoadConversations();
     }
 
