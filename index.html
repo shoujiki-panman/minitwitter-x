@@ -932,7 +932,6 @@
         .select('id, title, created_at').order('created_at', { ascending: false });
       listEl.innerHTML = '';
       for (const c of (convs || [])) {
-        if (c.title === '新しい会話') continue;   // 過去に溜まった空の会話は一覧に出さない
         const b = document.createElement('button');
         b.textContent = c.title || '会話';
         if (c.id === grokConvId) b.classList.add('active');
@@ -966,13 +965,26 @@
       await grokLoadConversations();
     }
 
+    // 昔の名残で「新しい会話」のままの会話を、1言目でリネーム（一覧で見分けられるように・削除はしない）
+    async function grokFixLegacyTitles() {
+      const { data: convs } = await supabase.from('conversations').select('id').eq('title', '新しい会話');
+      for (const c of (convs || [])) {
+        const { data: m } = await supabase.from('messages').select('content')
+          .eq('conversation_id', c.id).eq('role', 'user').order('created_at', { ascending: true }).limit(1);
+        if (m && m[0] && m[0].content) {
+          await supabase.from('conversations').update({ title: m[0].content.slice(0, 20) }).eq('id', c.id);
+        }
+      }
+    }
+
     async function grokInit() {
       if (grokInited || !myUserId) return;
       grokInited = true;
+      await grokFixLegacyTitles();
       const { data: mem } = await supabase.from('memories').select('fact');
       grokMemory = (mem || []).map((m) => m.fact);
       const { data: convs } = await supabase.from('conversations')
-        .select('id, summary').neq('title', '新しい会話')   // 空の会話は開かず、最新の中身ある会話を復元
+        .select('id, summary')
         .order('created_at', { ascending: false }).limit(1);
       if (convs && convs.length) await grokOpenConversation(convs[0].id);
       else await grokNewConversation();
