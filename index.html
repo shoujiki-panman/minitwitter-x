@@ -71,6 +71,17 @@
     #logoutDialog .dialog-actions button { width:100%; padding:10px; }
     #logoutConfirm { background:#fff; color:#000; }
     #logoutCancel { background:transparent; color:#e7e9ea; border:1px solid var(--line); }
+    /* AIチャット（Grok風） */
+    #grokConvList { display:flex; gap:8px; overflow-x:auto; padding:4px 0; }
+    #grokConvList button { background:transparent; color:var(--dim); border:1px solid var(--line); border-radius:9999px; padding:4px 12px; font-size:13px; font-weight:normal; white-space:nowrap; }
+    #grokConvList button.active { color:var(--blue); border-color:var(--blue); }
+    #grokLog { margin:8px 0; min-height:120px; }
+    .grok-msg { padding:10px 14px; border-radius:16px; margin:8px 0; max-width:85%; line-height:1.5; font-size:15px; white-space:pre-wrap; word-break:break-word; }
+    .grok-user { background:var(--blue); color:#fff; margin-left:auto; }
+    .grok-ai { background:#16181c; color:#e7e9ea; }
+    .grok-input { display:flex; gap:8px; align-items:flex-end; position:sticky; bottom:0; background:#000; padding:8px 0; }
+    .grok-input textarea { flex:1; margin:0; }
+    #grokMeta { font-size:12px; }
   </style>
 </head>
 <body>
@@ -85,6 +96,7 @@
   <nav id="nav">
     <a href="#home">ホーム</a>
     <a href="#explore">さがす</a>
+    <a href="#grok">AI</a>
     <a href="#profile">プロフィール</a>
   </nav>
 
@@ -144,6 +156,19 @@
     <ul id="userTweets"></ul>
   </section>
 
+  <!-- ===== AI（Grok風・AIと会話） ===== -->
+  <section id="view-grok" class="view">
+    <h3>AI と会話する</h3>
+    <div id="grokConvList"></div>
+    <button id="grokNew">＋ 新しい会話</button>
+    <div id="grokLog"></div>
+    <div class="grok-input">
+      <textarea id="grokInput" placeholder="AIに聞いてみる…" rows="2"></textarea>
+      <button id="grokSend">送信</button>
+    </div>
+    <p id="grokMeta"></p>
+  </section>
+
   <script type="module">
     import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -155,8 +180,8 @@
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     // --- N1: ハッシュで画面切替（SPAルーティング） ---
-    const VIEWS = ['home', 'explore', 'profile'];
-    const ALL_VIEWS = ['home', 'explore', 'profile', 'user'];
+    const VIEWS = ['home', 'explore', 'profile', 'grok'];
+    const ALL_VIEWS = ['home', 'explore', 'profile', 'user', 'grok'];
     function showView() {
       const hash = location.hash || '#home';
       // #user/<id> ＝ 他人のプロフィール画面
@@ -175,6 +200,7 @@
       document.querySelectorAll('#nav a').forEach((a) => {
         a.classList.toggle('active', a.getAttribute('href') === '#' + name);
       });
+      if (name === 'grok') grokInit();   // AIページを開いたら初期化（1回だけ）
     }
     // ログインしている時だけアプリ本体を表示。未ログインはログイン案内だけ
     function applyAuthGate(loggedIn) {
@@ -660,6 +686,201 @@
         li.appendChild(delBtn);
         myTweets.appendChild(li);
       }
+    }
+
+    // ===== AIチャット（Grok風）: 今日作ったサーバー(/api/chat)を呼ぶ =====
+    const GROK_SERVER = 'https://mini-chatgpt-clone.onrender.com';   // Renderにデプロイした本番サーバー
+    const GROK_BASE_SYSTEM = 'あなたは親切で、やさしい日本語で答えるアシスタントです。';
+    const GROK_RECENT = 4;                          // 直近で何件そのまま渡すか
+    let grokHistory = [{ role: 'system', content: GROK_BASE_SYSTEM }];
+    let grokConvId = null;
+    let grokSummary = '';
+    let grokSummarizedCount = 0;
+    let grokMemory = [];
+    let grokSending = false;
+    let grokInited = false;
+
+    async function grokToken() {
+      const { data } = await supabase.auth.getSession();
+      return data.session ? data.session.access_token : null;
+    }
+    function grokBuildSystem() {
+      let content = GROK_BASE_SYSTEM;
+      if (grokMemory.length) content += '\n【ユーザーについて】\n' + grokMemory.map((f) => '- ' + f).join('\n');
+      return { role: 'system', content };
+    }
+    function grokBuildMessages() {
+      const rest = grokHistory.slice(1);
+      const recent = rest.slice(-GROK_RECENT);
+      const msgs = [grokBuildSystem()];
+      if (grokSummary) msgs.push({ role: 'system', content: 'これまでの会話の要約:\n' + grokSummary });
+      msgs.push(...recent);
+      return msgs;
+    }
+    function grokRender() {
+      const log = document.getElementById('grokLog');
+      log.innerHTML = '';
+      for (const m of grokHistory) {
+        if (m.role === 'system') continue;
+        const div = document.createElement('div');
+        div.className = 'grok-msg ' + (m.role === 'user' ? 'grok-user' : 'grok-ai');
+        div.textContent = m.content;
+        log.appendChild(div);
+      }
+      log.scrollTop = log.scrollHeight;
+      document.getElementById('grokMeta').textContent =
+        '覚えている事実: ' + grokMemory.length + '件 ／ 要約に畳んだ発言: ' + grokSummarizedCount + '件';
+    }
+
+    async function grokSend(text) {
+      if (grokSending || !text.trim()) return;
+      grokSending = true;
+      document.getElementById('grokSend').disabled = true;
+      try {
+        const firstUser = grokHistory.slice(1).filter((m) => m.role === 'user').length === 0;
+        grokHistory.push({ role: 'user', content: text });
+        grokRender();
+        const token = await grokToken();
+        const res = await fetch(GROK_SERVER + '/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+          body: JSON.stringify({ messages: grokBuildMessages() }),
+        });
+        if (!res.ok) {
+          let msg = 'エラー';
+          try { msg = (await res.json()).error || msg; } catch (e) {}
+          grokHistory.push({ role: 'assistant', content: '⚠ ' + msg });
+          grokRender();
+          return;
+        }
+        grokHistory.push({ role: 'assistant', content: '' });
+        const aiMsg = grokHistory[grokHistory.length - 1];
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6);
+            if (payload === '[DONE]') continue;
+            if (payload === '[ERROR]') { aiMsg.content += '（エラー）'; continue; }
+            aiMsg.content += JSON.parse(payload);
+            grokRender();
+          }
+        }
+        if (grokConvId) {
+          await supabase.from('messages').insert([
+            { conversation_id: grokConvId, role: 'user', content: text },
+            { conversation_id: grokConvId, role: 'assistant', content: aiMsg.content },
+          ]);
+          if (firstUser) {   // 最初の発言を会話タイトルにする（一覧で見分けられるように）
+            await supabase.from('conversations').update({ title: text.slice(0, 20) }).eq('id', grokConvId);
+            await grokLoadConversations();
+          }
+        }
+        await grokMaybeSummarize();
+        await grokExtractFact(text);
+      } finally {
+        grokSending = false;
+        document.getElementById('grokSend').disabled = false;
+      }
+    }
+
+    async function grokMaybeSummarize() {
+      const rest = grokHistory.slice(1);
+      const overflow = rest.length - GROK_RECENT;
+      if (overflow <= grokSummarizedCount) return;
+      const chunk = rest.slice(grokSummarizedCount, overflow)
+        .map((m) => (m.role === 'user' ? 'あなた: ' : 'AI: ') + m.content).join('\n');
+      const token = await grokToken();
+      const res = await fetch(GROK_SERVER + '/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ oldSummary: grokSummary, overflowed: chunk }),
+      });
+      if (!res.ok) return;
+      grokSummary = (await res.json()).summary;
+      grokSummarizedCount = overflow;
+      if (grokConvId) await supabase.from('conversations').update({ summary: grokSummary }).eq('id', grokConvId);
+      grokRender();
+    }
+
+    async function grokExtractFact(text) {
+      const token = await grokToken();
+      const res = await fetch(GROK_SERVER + '/api/extract-fact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return;
+      const { fact } = await res.json();
+      if (fact) {
+        await supabase.from('memories').insert({ fact });
+        grokMemory.push(fact);
+        grokRender();
+      }
+    }
+
+    async function grokLoadConversations() {
+      const listEl = document.getElementById('grokConvList');
+      const { data: convs } = await supabase.from('conversations')
+        .select('id, title, created_at').order('created_at', { ascending: false });
+      listEl.innerHTML = '';
+      for (const c of (convs || [])) {
+        const b = document.createElement('button');
+        b.textContent = c.title || '会話';
+        if (c.id === grokConvId) b.classList.add('active');
+        b.addEventListener('click', () => grokOpenConversation(c.id));
+        listEl.appendChild(b);
+      }
+    }
+
+    async function grokOpenConversation(id) {
+      grokConvId = id;
+      const { data: conv } = await supabase.from('conversations').select('summary').eq('id', id).single();
+      grokSummary = (conv && conv.summary) || '';
+      grokSummarizedCount = 0;
+      const { data: rows } = await supabase.from('messages')
+        .select('role, content').eq('conversation_id', id).order('created_at', { ascending: true });
+      grokHistory = [{ role: 'system', content: GROK_BASE_SYSTEM }];
+      for (const r of (rows || [])) grokHistory.push({ role: r.role, content: r.content });
+      grokRender();
+      await grokLoadConversations();
+    }
+
+    async function grokNewConversation() {
+      if (!myUserId) return;
+      const { data: created } = await supabase.from('conversations')
+        .insert({ user_id: myUserId, title: '新しい会話' }).select('id, summary').single();
+      grokConvId = created.id;
+      grokSummary = '';
+      grokSummarizedCount = 0;
+      grokHistory = [{ role: 'system', content: GROK_BASE_SYSTEM }];
+      grokRender();
+      await grokLoadConversations();
+    }
+
+    async function grokInit() {
+      if (grokInited || !myUserId) return;
+      grokInited = true;
+      const { data: mem } = await supabase.from('memories').select('fact');
+      grokMemory = (mem || []).map((m) => m.fact);
+      const { data: convs } = await supabase.from('conversations')
+        .select('id, summary').order('created_at', { ascending: false }).limit(1);
+      if (convs && convs.length) await grokOpenConversation(convs[0].id);
+      else await grokNewConversation();
+      document.getElementById('grokSend').addEventListener('click', () => {
+        const input = document.getElementById('grokInput');
+        const t = input.value;
+        input.value = '';
+        grokSend(t);
+      });
+      document.getElementById('grokNew').addEventListener('click', grokNewConversation);
     }
 
     // 最初に一覧を表示
