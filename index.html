@@ -737,7 +737,6 @@
       grokSending = true;
       document.getElementById('grokSend').disabled = true;
       try {
-        const firstUser = grokHistory.slice(1).filter((m) => m.role === 'user').length === 0;
         grokHistory.push({ role: 'user', content: text });
         grokRender();
         const token = await grokToken();
@@ -773,16 +772,18 @@
             grokRender();
           }
         }
-        if (grokConvId) {
-          await supabase.from('messages').insert([
-            { conversation_id: grokConvId, role: 'user', content: text },
-            { conversation_id: grokConvId, role: 'assistant', content: aiMsg.content },
-          ]);
-          if (firstUser) {   // 最初の発言を会話タイトルにする（一覧で見分けられるように）
-            await supabase.from('conversations').update({ title: text.slice(0, 20) }).eq('id', grokConvId);
-            await grokLoadConversations();
-          }
+        // 最初の発言のときだけ、この会話をDBに作る（＝空の「新しい会話」を量産しない）
+        // 1言目をそのままタイトルにするので、一覧で見分けられる
+        if (!grokConvId) {
+          const { data: created } = await supabase.from('conversations')
+            .insert({ user_id: myUserId, title: text.slice(0, 20) }).select('id').single();
+          grokConvId = created.id;
+          await grokLoadConversations();
         }
+        await supabase.from('messages').insert([
+          { conversation_id: grokConvId, role: 'user', content: text },
+          { conversation_id: grokConvId, role: 'assistant', content: aiMsg.content },
+        ]);
         await grokMaybeSummarize();
         await grokExtractFact(text);
       } finally {
@@ -832,6 +833,7 @@
         .select('id, title, created_at').order('created_at', { ascending: false });
       listEl.innerHTML = '';
       for (const c of (convs || [])) {
+        if (c.title === '新しい会話') continue;   // 過去に溜まった空の会話は一覧に出さない
         const b = document.createElement('button');
         b.textContent = c.title || '会話';
         if (c.id === grokConvId) b.classList.add('active');
@@ -854,10 +856,8 @@
     }
 
     async function grokNewConversation() {
-      if (!myUserId) return;
-      const { data: created } = await supabase.from('conversations')
-        .insert({ user_id: myUserId, title: '新しい会話' }).select('id, summary').single();
-      grokConvId = created.id;
+      // まだDBには作らない。最初の発言のときにgrokSendが作る（空の会話を量産しないため）
+      grokConvId = null;
       grokSummary = '';
       grokSummarizedCount = 0;
       grokHistory = [{ role: 'system', content: GROK_BASE_SYSTEM }];
@@ -871,7 +871,8 @@
       const { data: mem } = await supabase.from('memories').select('fact');
       grokMemory = (mem || []).map((m) => m.fact);
       const { data: convs } = await supabase.from('conversations')
-        .select('id, summary').order('created_at', { ascending: false }).limit(1);
+        .select('id, summary').neq('title', '新しい会話')   // 空の会話は開かず、最新の中身ある会話を復元
+        .order('created_at', { ascending: false }).limit(1);
       if (convs && convs.length) await grokOpenConversation(convs[0].id);
       else await grokNewConversation();
       document.getElementById('grokSend').addEventListener('click', () => {
