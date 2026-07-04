@@ -92,6 +92,7 @@
     #summarizeTlBtn { margin:6px 0; }
     .ai-box { display:none; white-space:pre-wrap; line-height:1.5; font-size:14px;
       background:#16181c; border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
+    #semResults li { border-bottom:1px solid var(--line); padding:12px 2px; font-size:15px; line-height:1.4; }
   </style>
 </head>
 <body>
@@ -149,6 +150,14 @@
     <input id="searchInput" placeholder="ユーザーを検索（名前・ひとこと）" />
     <button id="searchBtn">検索</button>
     <ul id="userList"></ul>
+
+    <!-- 機能3: 意味で探す（pgvector 意味検索） -->
+    <h3>投稿を「意味」で探す（AI検索）</h3>
+    <input id="semSearchInput" placeholder="例: おいしい店の話 / 疲れた気分 …言葉が違っても意味で探す" />
+    <button id="semSearchBtn" type="button">意味で探す</button>
+    <button id="semIndexBtn" type="button" class="ai-btn">自分の投稿にAI索引をつける</button>
+    <div id="semSearchMsg" class="ai-box"></div>
+    <ul id="semResults"></ul>
   </section>
 
   <!-- ===== プロフィール（マイページ） ===== -->
@@ -592,13 +601,15 @@
       // 「下書き」チェックが入っていたら is_public=false（自分だけ）、なければ公開
       const isPublic = !document.getElementById('isDraft').checked;
 
-      const { error } = await supabase
+      const { data: inserted, error } = await supabase
         .from('tweets')
         .insert({ body: body, is_public: isPublic })
         .select();
 
       if (error) { console.error(error); alert('保存に失敗: ' + error.message); return; }
       tweetBody.value = '';   // 入力欄を空に
+      // 意味検索用の索引(embedding)を裏で付ける（失敗しても投稿は成功済み）
+      if (inserted && inserted[0]) semIndexTweet(inserted[0].id, body);
       await loadTweets();     // 公開タイムライン更新
       await loadMyTweets();   // マイページの自分の投稿も更新
     });
@@ -1020,6 +1031,71 @@
           '今のタイムライン:\n' + text);
       });
     });
+
+    // --- 機能3: 意味で探す（pgvector）---
+    // テキストを意味ベクトルに変換する（サーバーの /api/embed 経由。キーはサーバーだけが持つ）
+    async function aiEmbed(text) {
+      const token = await grokToken();
+      const res = await fetch(GROK_SERVER + '/api/embed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error('embedに失敗（サーバーが未対応かも）');
+      return (await res.json()).embedding;
+    }
+
+    // 投稿に索引(embedding)を付ける。失敗しても投稿自体は成功しているので黙って諦める
+    async function semIndexTweet(id, body) {
+      try {
+        const embedding = await aiEmbed(body);
+        await supabase.from('tweets').update({ embedding }).eq('id', id);
+      } catch (e) { console.warn('索引付けをスキップ:', e.message); }
+    }
+
+    // 自分の未索引の投稿にまとめて索引を付ける（既存投稿のバックフィル）
+    document.getElementById('semIndexBtn').addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      const msg = document.getElementById('semSearchMsg');
+      return aiRun(btn, msg, '索引を作成中', async () => {
+        const { data: ts } = await supabase.from('tweets')
+          .select('id, body').eq('user_id', myUserId).is('embedding', null);
+        if (!ts || !ts.length) return '索引をつける投稿はありません（もう全部ついています）。';
+        let n = 0;
+        for (const t of ts) {
+          const embedding = await aiEmbed(t.body);
+          await supabase.from('tweets').update({ embedding }).eq('id', t.id);
+          msg.textContent = '索引を作成中… ' + (++n) + '/' + ts.length;
+        }
+        return n + '件に索引をつけました。「意味で探す」で検索できます。';
+      });
+    });
+
+    // 意味検索の実行：質問をベクトル化 → match_tweets で意味が近い投稿を取る
+    async function semSearch() {
+      const q = document.getElementById('semSearchInput').value.trim();
+      const list = document.getElementById('semResults');
+      list.innerHTML = '';
+      if (!q) return;
+      const btn = document.getElementById('semSearchBtn');
+      const msg = document.getElementById('semSearchMsg');
+      await aiRun(btn, msg, '意味で検索中', async () => {
+        const embedding = await aiEmbed(q);
+        const { data, error } = await supabase.rpc('match_tweets', { query_embedding: embedding, match_count: 10 });
+        if (error) throw new Error('検索に失敗（DBの準備がまだかも）: ' + error.message);
+        if (!data || !data.length) return '近い投稿は見つかりませんでした。';
+        const names = await fetchNames(data.map((r) => r.user_id));
+        for (const r of data) {
+          const li = document.createElement('li');
+          const who = (names[r.user_id] && names[r.user_id].name) || '誰か';
+          li.textContent = who + '：' + r.body + '（近さ ' + Math.round(r.similarity * 100) + '％）';
+          list.appendChild(li);
+        }
+        return '意味が近い順に ' + data.length + ' 件。';
+      });
+    }
+    document.getElementById('semSearchBtn').addEventListener('click', semSearch);
+    document.getElementById('semSearchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') semSearch(); });
 
     // 最初に一覧を表示
     await loadTweets();
