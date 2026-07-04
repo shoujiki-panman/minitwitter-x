@@ -966,21 +966,9 @@
       await grokLoadConversations();
     }
 
-    async function grokCleanupEmpty() {
-      // 中身のない（メッセージが1件もない）空の会話をDBから消す。
-      // 会話id一覧と、実際に使われているconversation_idを突き合わせて、未使用のものを削除。
-      const { data: convs } = await supabase.from('conversations').select('id');
-      const { data: msgs } = await supabase.from('messages').select('conversation_id');
-      const used = new Set((msgs || []).map((m) => m.conversation_id));
-      for (const c of (convs || [])) {
-        if (!used.has(c.id)) await supabase.from('conversations').delete().eq('id', c.id);
-      }
-    }
-
     async function grokInit() {
       if (grokInited || !myUserId) return;
       grokInited = true;
-      await grokCleanupEmpty();   // 起動時に空の会話を掃除
       const { data: mem } = await supabase.from('memories').select('fact');
       grokMemory = (mem || []).map((m) => m.fact);
       const { data: convs } = await supabase.from('conversations')
