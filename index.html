@@ -1043,7 +1043,7 @@
       grokSending = true;
       try {
         const msgs = grokBuildMessages();
-        msgs.push({ role: 'user', content: '計画のとおり実行してください。' });
+        msgs.push({ role: 'user', content: '計画のとおり実行してください。投稿の下書きは、本文に直接書かず、必ず propose_post 道具で出してください。' });
         grokHistory.push({ role: 'assistant', content: '' });
         const aiMsg = grokHistory[grokHistory.length - 1];
         grokRender();
