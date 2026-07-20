@@ -82,6 +82,23 @@
     .grok-input { display:flex; gap:8px; align-items:flex-end; position:sticky; bottom:0; background:#000; padding:8px 0; }
     .grok-input textarea { flex:1; margin:0; }
     #grokMeta { font-size:12px; }
+    /* 第3章: 承認待ちのボタン。計画は等幅で（Claude Code風） */
+    #agentApprove { margin:8px 0; display:flex; gap:8px; }
+    /* 第6章: 道具の実行ログ（Claude Code風） */
+    .grok-msg .tool-call { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px;
+      color:var(--blue); margin-top:4px; }
+    .grok-msg .tool-result { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px;
+      color:var(--dim); margin-bottom:4px; }
+    /* 第5章: 下書きの確認ダイアログ */
+    #draftBox { margin:8px 0; padding:12px; border:1px solid var(--blue); border-radius:12px; background:#0d1117; }
+    #draftBox .draft-label { margin:0 0 8px; font-size:13px; color:var(--dim); }
+    #draftBox .draft-body { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:14px;
+      line-height:1.6; padding:10px 12px; border-left:3px solid var(--blue); background:#000; white-space:pre-wrap; }
+    #draftBox .draft-actions { display:flex; gap:8px; margin-top:10px; }
+    #draftBox button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line); }
+    #agentApprove button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line); }
+    .grok-ai.is-plan { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px;
+      background:#0d1117; border:1px solid var(--line); }
     #grokWebToggle { display:inline-flex; align-items:center; gap:6px; margin:6px 0; font-size:13px; }
     #grokSources { display:none; margin:0 0 8px; padding:10px 12px; background:#16181c;
       border:1px solid var(--line); border-radius:12px; font-size:13px; }
@@ -200,9 +217,24 @@
     <label id="grokWebToggle"><input type="checkbox" id="grokWeb" /> 🌐 最新情報も調べる（Web検索）</label>
     <div id="grokLog"></div>
     <div id="grokSources"></div>
+    <!-- 第3章: 承認待ちのときだけ出る。押すまでエージェントは1歩も動かない -->
+    <div id="agentApprove" style="display:none">
+      <button id="agentGo">進める</button>
+      <button id="agentStop" class="ghost">やめる</button>
+    </div>
+    <!-- 第5章: 下書きの確認。ここの「投稿する」だけが世界に触れる -->
+    <div id="draftBox" style="display:none">
+      <p class="draft-label">下書きができました:</p>
+      <div id="draftBody" class="draft-body"></div>
+      <div class="draft-actions">
+        <button id="draftPost">投稿する</button>
+        <button id="draftCancel" class="ghost">やめる</button>
+      </div>
+    </div>
     <div class="grok-input">
       <textarea id="grokInput" placeholder="AIに聞いてみる…" rows="2"></textarea>
       <button id="grokSend">送信</button>
+      <button id="agentSend" title="計画を立ててから動きます">🤖 任せる</button>
     </div>
     <p id="grokMeta"></p>
   </section>
@@ -601,25 +633,30 @@
       }
     }
 
-    // 【書く】ポストを押したら保存して、一覧を更新
-    postBtn.addEventListener('click', async () => {
-      const body = tweetBody.value.trim();
-      if (!body) return; // 空は送らない
-
-      // 「下書き」チェックが入っていたら is_public=false（自分だけ）、なければ公開
-      const isPublic = !document.getElementById('isDraft').checked;
-
+    // 【書く】投稿の実体。★第5章: 世界に触る口はここ1つだけ。
+    // ポストボタンも、エージェントの確認ダイアログも、必ずこの関数を通る。
+    // エージェント側（サーバー）にはこの関数に相当する道具が無いので、人間がボタンを押さない限り投稿は起きない。
+    async function createTweet(body, isPublic) {
+      const text = (body || '').trim();
+      if (!text) return false; // 空は送らない
       const { data: inserted, error } = await supabase
         .from('tweets')
-        .insert({ body: body, is_public: isPublic })
+        .insert({ body: text, is_public: isPublic })
         .select();
-
-      if (error) { console.error(error); alert('保存に失敗: ' + error.message); return; }
-      tweetBody.value = '';   // 入力欄を空に
+      if (error) { console.error(error); alert('保存に失敗: ' + error.message); return false; }
       // 意味検索用の索引(embedding)を裏で付ける（失敗しても投稿は成功済み）
-      if (inserted && inserted[0]) semIndexTweet(inserted[0].id, body);
+      if (inserted && inserted[0]) semIndexTweet(inserted[0].id, text);
       await loadTweets();     // 公開タイムライン更新
       await loadMyTweets();   // マイページの自分の投稿も更新
+      return true;
+    }
+
+    // ポストを押したら保存して、一覧を更新
+    postBtn.addEventListener('click', async () => {
+      // 「下書き」チェックが入っていたら is_public=false（自分だけ）、なければ公開
+      const isPublic = !document.getElementById('isDraft').checked;
+      const ok = await createTweet(tweetBody.value, isPublic);
+      if (ok) tweetBody.value = '';   // 入力欄を空に
     });
 
     // --- 第7章/X4b: ユーザー一覧からフォロー ---
@@ -775,8 +812,20 @@
       for (const m of grokHistory) {
         if (m.role === 'system') continue;
         const div = document.createElement('div');
-        div.className = 'grok-msg ' + (m.role === 'user' ? 'grok-user' : 'grok-ai');
-        div.textContent = m.content;
+        div.className = 'grok-msg ' + (m.role === 'user' ? 'grok-user' : 'grok-ai')
+          + (m.isPlan ? ' is-plan' : '');   // 計画は等幅で見せる
+        // ★第6章: 道具の行（⏺ と └）だけ Claude Code 風に色と等幅をあてる
+        if (m.role !== 'user' && /(^|\n)⏺ /.test(m.content)) {
+          for (const line of m.content.split('\n')) {
+            const row = document.createElement('div');
+            if (line.startsWith('⏺ ')) row.className = 'tool-call';
+            else if (line.trimStart().startsWith('└ ')) row.className = 'tool-result';
+            row.textContent = line;
+            div.appendChild(row);
+          }
+        } else {
+          div.textContent = m.content;
+        }
         log.appendChild(div);
       }
       log.scrollTop = log.scrollHeight;
@@ -891,6 +940,131 @@
       }
     }
 
+    // ===== 第3章: エージェント（計画 → 承認 → 実行）=====
+    // サーバーのループの途中で人間を待つことはできない（HTTPが切れる）ので、
+    // 「計画をもらう」と「実行する」の2往復に割る。承認はその隙間で行う。
+
+    // /api/chat のストリームを受け取って、渡されたメッセージに書き足していく共通部品
+    async function agentStreamInto(body, aiMsg) {
+      const token = await grokToken();
+      const res = await fetch(GROK_SERVER + '/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        let msg = 'エラー';
+        try { msg = (await res.json()).error || msg; } catch (e) {}
+        aiMsg.content = '⚠ ' + msg;
+        grokRender();
+        return false;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6);
+          if (payload === '[DONE]') continue;
+          if (payload === '[ERROR]') { aiMsg.content += '（エラー）'; continue; }
+          const v = JSON.parse(payload);
+          // ★第5章: 文字列なら本文、オブジェクトなら「下書きの提案」
+          if (v && typeof v === 'object' && v.type === 'draft') {
+            showDraft(v.body);
+            continue;
+          }
+          aiMsg.content += v;
+          grokRender();
+        }
+      }
+      return true;
+    }
+
+    // ===== 第5章: 下書きの確認ダイアログ =====
+    let pendingDraft = null;
+
+    function showDraft(body) {
+      pendingDraft = body;
+      document.getElementById('draftBody').textContent = body;
+      document.getElementById('draftBox').style.display = 'block';
+    }
+
+    function hideDraft() {
+      pendingDraft = null;
+      document.getElementById('draftBox').style.display = 'none';
+    }
+
+    // 「投稿する」= ここが世界に触る唯一の場所。押されるまで insert は1回も呼ばれない
+    async function draftPost() {
+      if (!pendingDraft) return;
+      const body = pendingDraft;
+      hideDraft();
+      const ok = await createTweet(body, true);   // ← ポストボタンと同じ道を通る
+      grokHistory.push({ role: 'assistant', content: ok ? '✓ 投稿しました: ' + body : '⚠ 投稿に失敗しました' });
+      grokRender();
+    }
+
+    // 「やめる」= 何も起きない。DBには1行も増えていない
+    function draftCancel() {
+      const body = pendingDraft;
+      hideDraft();
+      grokHistory.push({ role: 'assistant', content: '→ 投稿しませんでした（下書きは保存されていません）\n  ' + (body || '') });
+      grokRender();
+    }
+
+    function showApprove(on) {
+      document.getElementById('agentApprove').style.display = on ? 'flex' : 'none';
+    }
+
+    // ① 計画をもらう。planOnly:true なので、サーバー側で道具が封じられている
+    async function agentPlan(text) {
+      if (grokSending || !text.trim()) return;
+      grokSending = true;
+      document.getElementById('agentSend').disabled = true;
+      try {
+        grokHistory.push({ role: 'user', content: text });
+        grokRender();
+        const msgs = grokBuildMessages();          // ← 計画メッセージを足す前に作る
+        grokHistory.push({ role: 'assistant', content: '', isPlan: true });
+        const aiMsg = grokHistory[grokHistory.length - 1];
+        const ok = await agentStreamInto({ messages: msgs, planOnly: true }, aiMsg);
+        if (ok) showApprove(true);                 // 承認ボタンはここで初めて出る
+      } finally {
+        grokSending = false;
+        document.getElementById('agentSend').disabled = false;
+      }
+    }
+
+    // ② 承認された。今度は planOnly を付けないので道具が使える
+    async function agentProceed() {
+      showApprove(false);
+      if (grokSending) return;
+      grokSending = true;
+      try {
+        const msgs = grokBuildMessages();
+        msgs.push({ role: 'user', content: '計画のとおり実行してください。' });
+        grokHistory.push({ role: 'assistant', content: '' });
+        const aiMsg = grokHistory[grokHistory.length - 1];
+        grokRender();
+        await agentStreamInto({ messages: msgs }, aiMsg);
+      } finally {
+        grokSending = false;
+      }
+    }
+
+    // ③ やめた。何も実行されていない
+    function agentCancel() {
+      showApprove(false);
+      grokHistory.push({ role: 'assistant', content: '→ 中止しました（何も実行していません）' });
+      grokRender();
+    }
+
     async function grokMaybeSummarize() {
       const rest = grokHistory.slice(1);
       const overflow = rest.length - GROK_RECENT;
@@ -995,6 +1169,18 @@
         grokSend(t);
       });
       document.getElementById('grokNew').addEventListener('click', grokNewConversation);
+      // 第3章: エージェント（計画→承認→実行）
+      document.getElementById('agentSend').addEventListener('click', () => {
+        const input = document.getElementById('grokInput');
+        const t = input.value;
+        input.value = '';
+        agentPlan(t);
+      });
+      document.getElementById('agentGo').addEventListener('click', agentProceed);
+      document.getElementById('agentStop').addEventListener('click', agentCancel);
+      // 第5章: 下書きの確認
+      document.getElementById('draftPost').addEventListener('click', draftPost);
+      document.getElementById('draftCancel').addEventListener('click', draftCancel);
     }
 
     // ===== AI機能（要約・作文アシスト・人物要約）=====
