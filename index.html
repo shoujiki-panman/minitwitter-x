@@ -347,8 +347,10 @@
     const loginBtn = document.getElementById('loginBtn');
     const status = document.getElementById('status');
 
-    // ▼▼▼ ここだけ田沼さんが書いた ▼▼▼
+    // ▼▼▼ ここだけ田沼さんが書いた ▼▼▼（2026-07-20 押した感が無いとの声で「移動中…」表示だけAIが追記）
     loginBtn.addEventListener('click', async () => {
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Googleへ移動中…';
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: { redirectTo: window.location.origin + window.location.pathname },
@@ -875,6 +877,10 @@
           renderGrokSources(data.citations);
         } else {
           // 通常モード: /api/chat をストリーミング表示
+          // つなぎ文を先に出してから問い合わせる（寝起きのサーバーは1分近く黙るため）
+          grokHistory.push({ role: 'assistant', content: '🤔 考え中…（サーバーが寝ていたら1分ほどかかります）' });
+          const aiMsg = grokHistory[grokHistory.length - 1];
+          grokRender();
           const res = await fetch(GROK_SERVER + '/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
@@ -883,15 +889,14 @@
           if (!res.ok) {
             let msg = 'エラー';
             try { msg = (await res.json()).error || msg; } catch (e) {}
-            grokHistory.push({ role: 'assistant', content: '⚠ ' + msg });
+            aiMsg.content = '⚠ ' + msg;
             grokRender();
             return;
           }
-          grokHistory.push({ role: 'assistant', content: '' });
-          const aiMsg = grokHistory[grokHistory.length - 1];
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
+          let waiting = true;   // まだ本文が届いていない＝つなぎ文を出したまま
           while (true) {
             const { value, done } = await reader.read();
             if (done) break;
@@ -910,10 +915,12 @@
                 showDraft(v.body);
                 continue;
               }
+              if (waiting) { aiMsg.content = ''; waiting = false; }  // つなぎ文を消す
               aiMsg.content += v;
               grokRender();
             }
           }
+          if (waiting) { aiMsg.content = ''; grokRender(); }
         }
         // 最初の発言のときだけ、この会話をDBに作る（＝空の「新しい会話」を量産しない）
         // 1言目をそのままタイトルにするので、一覧で見分けられる
@@ -940,6 +947,7 @@
     // 「計画をもらう」と「実行する」の2往復に割る。承認はその隙間で行う。
 
     // /api/chat のストリームを受け取って、渡されたメッセージに書き足していく共通部品
+    // aiMsg.content に「考え中…」等のつなぎ文を入れておくと、最初の文字が届いた瞬間に消して差し替える
     async function agentStreamInto(body, aiMsg) {
       const token = await grokToken();
       const res = await fetch(GROK_SERVER + '/api/chat', {
@@ -957,6 +965,7 @@
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let waiting = true;   // まだ本文が1文字も届いていない＝つなぎ文を出したまま
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -974,10 +983,12 @@
             showDraft(v.body);
             continue;
           }
+          if (waiting) { aiMsg.content = ''; waiting = false; }  // つなぎ文を消す
           aiMsg.content += v;
           grokRender();
         }
       }
+      if (waiting) { aiMsg.content = ''; grokRender(); }  // 本文なしで終了（下書きだけ等）→つなぎ文を消す
       return true;
     }
 
@@ -1026,8 +1037,10 @@
         grokHistory.push({ role: 'user', content: text });
         grokRender();
         const msgs = grokBuildMessages();          // ← 計画メッセージを足す前に作る
-        grokHistory.push({ role: 'assistant', content: '', isPlan: true });
+        // つなぎ文（サーバーが寝起きだと50秒以上かかることがある。無反応＝壊れたに見えるのを防ぐ）
+        grokHistory.push({ role: 'assistant', content: '🤔 計画を考え中…（サーバーが寝ていたら1分ほどかかります）', isPlan: true });
         const aiMsg = grokHistory[grokHistory.length - 1];
+        grokRender();
         const ok = await agentStreamInto({ messages: msgs, planOnly: true }, aiMsg);
         if (ok) showApprove(true);                 // 承認ボタンはここで初めて出る
       } finally {
@@ -1044,7 +1057,7 @@
       try {
         const msgs = grokBuildMessages();
         msgs.push({ role: 'user', content: '計画のとおり実行してください。投稿の下書きは、本文に直接書かず、必ず propose_post 道具で出してください。' });
-        grokHistory.push({ role: 'assistant', content: '' });
+        grokHistory.push({ role: 'assistant', content: '⚙️ 実行中…' });
         const aiMsg = grokHistory[grokHistory.length - 1];
         grokRender();
         await agentStreamInto({ messages: msgs }, aiMsg);
