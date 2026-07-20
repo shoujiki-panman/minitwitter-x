@@ -128,7 +128,7 @@
   <nav id="nav">
     <a href="#home">ホーム</a>
     <a href="#explore">さがす</a>
-    <a href="#grok">AI</a>
+    <a href="#ai">AI</a>
     <a href="#profile">プロフィール</a>
   </nav>
 
@@ -198,7 +198,7 @@
   </section>
 
   <!-- ===== AI（Grok風・AIと会話） ===== -->
-  <section id="view-grok" class="view">
+  <section id="view-ai" class="view">
     <h3>AI と会話する</h3>
     <div id="grokConvList"></div>
     <button id="grokNew">＋ 新しい会話</button>
@@ -238,8 +238,8 @@
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     // --- N1: ハッシュで画面切替（SPAルーティング） ---
-    const VIEWS = ['home', 'explore', 'profile', 'grok'];
-    const ALL_VIEWS = ['home', 'explore', 'profile', 'user', 'grok'];
+    const VIEWS = ['home', 'explore', 'profile', 'ai'];
+    const ALL_VIEWS = ['home', 'explore', 'profile', 'user', 'ai'];
     function showView() {
       const hash = location.hash || '#home';
       // #user/<id> ＝ 他人のプロフィール画面
@@ -258,7 +258,7 @@
       document.querySelectorAll('#nav a').forEach((a) => {
         a.classList.toggle('active', a.getAttribute('href') === '#' + name);
       });
-      if (name === 'grok') grokInit();   // AIページを開いたら初期化（1回だけ）
+      if (name === 'ai') grokInit();   // AIページを開いたら初期化（1回だけ）
     }
     // ログインしている時だけアプリ本体を表示。未ログインはログイン案内だけ
     function applyAuthGate(loggedIn) {
@@ -903,7 +903,14 @@
               const payload = line.slice(6);
               if (payload === '[DONE]') continue;
               if (payload === '[ERROR]') { aiMsg.content += '（エラー）'; continue; }
-              aiMsg.content += JSON.parse(payload);
+              const v = JSON.parse(payload);
+              // 「送信」経路でも下書きの提案を受け取れるようにする
+              // （修正要望→propose_post のやり直しが、確認ボックスに反映される）
+              if (v && typeof v === 'object' && v.type === 'draft') {
+                showDraft(v.body);
+                continue;
+              }
+              aiMsg.content += v;
               grokRender();
             }
           }
