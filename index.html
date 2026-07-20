@@ -105,14 +105,12 @@
     #grokSources .src-head { color:var(--dim); margin-bottom:4px; }
     #grokSources a { display:block; color:var(--blue); text-decoration:none; padding:2px 0; word-break:break-all; }
     #grokSources a:hover { text-decoration:underline; }
-    /* AI機能（作文アシスト・要約） */
-    .ai-tools { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
-    .ai-tools button, #summarizeTlBtn, .ai-btn {
+    /* AI機能（意味検索・人物要約で使用） */
+    .ai-btn {
       background:transparent; color:var(--blue); border:1px solid var(--blue);
       border-radius:9999px; padding:4px 12px; font-size:13px; font-weight:normal;
     }
-    .ai-tools button:disabled, #summarizeTlBtn:disabled, .ai-btn:disabled { opacity:.5; cursor:default; }
-    #summarizeTlBtn { margin:6px 0; }
+    .ai-btn:disabled { opacity:.5; cursor:default; }
     .ai-box { display:none; white-space:pre-wrap; line-height:1.5; font-size:14px;
       background:#16181c; border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
     #semResults li { border-bottom:1px solid var(--line); padding:12px 2px; font-size:15px; line-height:1.4; }
@@ -151,16 +149,6 @@
     <textarea id="tweetBody" placeholder="いまどうしてる？" rows="3"></textarea><br />
     <button id="postBtn">ポスト</button>
     <label><input type="checkbox" id="isDraft" /> 下書き（自分だけ）</label>
-    <!-- 機能2: 投稿の下書きAI（入力欄の文章を書き換える） -->
-    <div id="composeAi" class="ai-tools">
-      <button type="button" data-ai="polish">AIで整える</button>
-      <button type="button" data-ai="continue">続きを書く</button>
-      <button type="button" data-ai="shorten">短く</button>
-      <button type="button" data-ai="hashtags">ハッシュタグ</button>
-    </div>
-    <!-- 機能1: タイムライン要約「今北産業」 -->
-    <button id="summarizeTlBtn" type="button">🧵 タイムラインを3行で要約</button>
-    <div id="tlSummary" class="ai-box"></div>
     <ul id="timeline"></ul>
     <h3>ホームタイムライン（フォロー中の人だけ）</h3>
     <button id="loadHomeBtn">ホームを更新</button>
@@ -1236,44 +1224,8 @@
       }
     }
 
-    // --- 機能2: 投稿の下書きAI（入力欄の文章を書き換える）---
-    const composeAiPrompts = {
-      polish:   ['あなたはSNS投稿の編集者です。意味は変えず、日本語を自然で読みやすく整え、本文だけを返してください。前置きや説明は不要。', '次の投稿を整えて:'],
-      continue: ['あなたはSNS投稿のライターです。書きかけの続きを自然に書き足し、投稿の全文だけを返してください。前置きや説明は不要。', '次の書きかけの続きを書いて:'],
-      shorten:  ['あなたはSNS投稿の編集者です。140字以内に、要点を残して短くまとめ、本文だけを返してください。前置きや説明は不要。', '次の投稿を短く:'],
-      hashtags: ['あなたはSNSの中の人です。内容に合うハッシュタグを3〜5個だけ、半角#つき・スペース区切りで返してください。説明は不要。', '次の投稿に合うハッシュタグ:'],
-    };
-    document.querySelectorAll('#composeAi button').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const ta = document.getElementById('tweetBody');
-        const body = ta.value.trim();
-        if (!body) { alert('先に投稿を書いてね'); return; }
-        const [sys, lead] = composeAiPrompts[btn.dataset.ai];
-        return aiRun(btn, null, '', async () => {
-          const out = await aiComplete(sys, lead + '\n' + body);
-          // ハッシュタグは元の本文に足す。それ以外は本文を置き換える
-          ta.value = btn.dataset.ai === 'hashtags' ? body + '\n' + out : out;
-          return out;
-        });
-      });
-    });
-
-    // --- 機能1: タイムライン要約「今北産業」---
-    document.getElementById('summarizeTlBtn').addEventListener('click', (e) => {
-      const btn = e.currentTarget;
-      const box = document.getElementById('tlSummary');
-      return aiRun(btn, box, '要約中', async () => {
-        const { data: ts } = await supabase.from('tweets')
-          .select('body, user_id').eq('is_public', true)
-          .order('created_at', { ascending: false }).limit(30);
-        if (!ts || !ts.length) return 'まだ投稿がありません。';
-        const names = await fetchNames(ts.map((t) => t.user_id));
-        const text = ts.map((t) => '・' + ((names[t.user_id] && names[t.user_id].name) || '誰か') + ': ' + t.body).join('\n');
-        return aiComplete(
-          'あなたはSNSのまとめ役です。タイムラインを話題ごとに、3行以内で「今北産業（＝今北の人に3行で状況説明）」風に要約してください。',
-          '今のタイムライン:\n' + text);
-      });
-    });
+    // （機能1: タイムライン要約・機能2: 投稿の下書きAI は 2026-07-20 に削除。
+    //   エージェント（🤖任せる）が同じことをできるようになったため）
 
     // --- 機能3: 意味で探す（pgvector）---
     // テキストを意味ベクトルに変換する（サーバーの /api/embed 経由。キーはサーバーだけが持つ）
